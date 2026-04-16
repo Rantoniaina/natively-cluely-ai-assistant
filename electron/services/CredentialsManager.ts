@@ -27,6 +27,7 @@ export interface StoredCredentials {
     groqApiKey?: string;
     openaiApiKey?: string;
     claudeApiKey?: string;
+    openrouterApiKey?: string;
     googleServiceAccountPath?: string;
     customProviders?: CustomProvider[];
     curlProviders?: CurlProvider[];
@@ -53,6 +54,7 @@ export interface StoredCredentials {
     groqPreferredModel?: string;
     openaiPreferredModel?: string;
     claudePreferredModel?: string;
+    openrouterPreferredModel?: string;
     // Free trial state
     trialToken?:     string;   // server-issued signed token (natively_trial_…)
     trialExpiresAt?: string;   // ISO timestamp — local copy for startup check
@@ -101,6 +103,10 @@ export class CredentialsManager {
 
     public getClaudeApiKey(): string | undefined {
         return this.credentials.claudeApiKey;
+    }
+
+    public getOpenrouterApiKey(): string | undefined {
+        return this.credentials.openrouterApiKey;
     }
 
     public getGoogleServiceAccountPath(): string | undefined {
@@ -204,6 +210,12 @@ export class CredentialsManager {
         this.credentials.claudeApiKey = key;
         this.saveCredentials();
         console.log('[CredentialsManager] Claude API Key updated');
+    }
+
+    public setOpenrouterApiKey(key: string): void {
+        this.credentials.openrouterApiKey = key;
+        this.saveCredentials();
+        console.log('[CredentialsManager] OpenRouter API Key updated');
     }
 
     public setGoogleServiceAccountPath(filePath: string): void {
@@ -342,12 +354,12 @@ export class CredentialsManager {
         console.log('[CredentialsManager] Natively API Key updated');
     }
 
-    public getPreferredModel(provider: 'gemini' | 'groq' | 'openai' | 'claude'): string | undefined {
+    public getPreferredModel(provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'openrouter'): string | undefined {
         const key = `${provider}PreferredModel` as keyof StoredCredentials;
         return this.credentials[key] as string | undefined;
     }
 
-    public setPreferredModel(provider: 'gemini' | 'groq' | 'openai' | 'claude', modelId: string): void {
+    public setPreferredModel(provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'openrouter', modelId: string): void {
         const key = `${provider}PreferredModel` as keyof StoredCredentials;
         (this.credentials as any)[key] = modelId;
         this.saveCredentials();

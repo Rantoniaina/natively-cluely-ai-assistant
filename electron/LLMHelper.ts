@@ -32,6 +32,8 @@ const GEMINI_PRO_MODEL = "gemini-3.1-pro-preview"
 const GROQ_MODEL = "llama-3.3-70b-versatile"
 const OPENAI_MODEL = "gpt-5.4"
 const CLAUDE_MODEL = "claude-sonnet-4-6"
+const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+const OPENROUTER_DEFAULT_MODEL = "openai/gpt-4o-mini"
 const MAX_OUTPUT_TOKENS = 65536
 const CLAUDE_MAX_OUTPUT_TOKENS = 64000
 
@@ -42,11 +44,13 @@ export class LLMHelper {
   private client: GoogleGenAI | null = null
   private groqClient: Groq | null = null
   private openaiClient: OpenAI | null = null
+  private openrouterClient: OpenAI | null = null
   private claudeClient: Anthropic | null = null
   private apiKey: string | null = null
   private groqApiKey: string | null = null
   private openaiApiKey: string | null = null
   private claudeApiKey: string | null = null
+  private openrouterApiKey: string | null = null
   private useOllama: boolean = false
   private ollamaModel: string = "llama3.2"
   private ollamaUrl: string = "http://localhost:11434"
@@ -66,7 +70,7 @@ export class LLMHelper {
   // Self-improving model version manager for vision analysis
   private modelVersionManager: ModelVersionManager;
 
-  constructor(apiKey?: string, useOllama: boolean = false, ollamaModel?: string, ollamaUrl?: string, groqApiKey?: string, openaiApiKey?: string, claudeApiKey?: string) {
+  constructor(apiKey?: string, useOllama: boolean = false, ollamaModel?: string, ollamaUrl?: string, groqApiKey?: string, openaiApiKey?: string, claudeApiKey?: string, openrouterApiKey?: string) {
     this.useOllama = useOllama
 
     // Initialize rate limiters
@@ -94,6 +98,19 @@ export class LLMHelper {
       this.claudeApiKey = claudeApiKey
       this.claudeClient = new Anthropic({ apiKey: claudeApiKey })
       console.log(`[LLMHelper] Claude client initialized with model: ${CLAUDE_MODEL}`)
+    }
+
+    if (openrouterApiKey) {
+      this.openrouterApiKey = openrouterApiKey
+      this.openrouterClient = new OpenAI({
+        apiKey: openrouterApiKey,
+        baseURL: OPENROUTER_BASE_URL,
+        defaultHeaders: {
+          "HTTP-Referer": "https://natively.com",
+          "X-OpenRouter-Title": "Natively",
+        },
+      })
+      console.log(`[LLMHelper] OpenRouter client initialized (${OPENROUTER_BASE_URL})`)
     }
 
     if (useOllama) {
@@ -142,6 +159,24 @@ export class LLMHelper {
     console.log("[LLMHelper] Claude API Key updated.");
   }
 
+  public setOpenrouterApiKey(apiKey: string) {
+    const trimmed = apiKey?.trim();
+    this.openrouterApiKey = trimmed || null;
+    if (trimmed) {
+      this.openrouterClient = new OpenAI({
+        apiKey: trimmed,
+        baseURL: OPENROUTER_BASE_URL,
+        defaultHeaders: {
+          "HTTP-Referer": "https://natively.com",
+          "X-OpenRouter-Title": "Natively",
+        },
+      });
+    } else {
+      this.openrouterClient = null;
+    }
+    console.log("[LLMHelper] OpenRouter API Key updated.");
+  }
+
   public setNativelyKey(key: string | null): void {
     this.nativelyKey = key || null;
     console.log(`[LLMHelper] Natively key ${key ? 'set' : 'cleared'}`);
@@ -176,10 +211,12 @@ export class LLMHelper {
     this.groqApiKey = null;
     this.openaiApiKey = null;
     this.claudeApiKey = null;
+    this.openrouterApiKey = null;
     this.nativelyKey = null;
     this.client = null;
     this.groqClient = null;
     this.openaiClient = null;
+    this.openrouterClient = null;
     this.claudeClient = null;
     // Destroy rate limiters
     if (this.rateLimiters) {
@@ -205,7 +242,25 @@ export class LLMHelper {
 
   // --- Model Type Checkers ---
   private isOpenAiModel(modelId: string): boolean {
+    if (this.isOpenRouterModel(modelId)) return false;
     return modelId.startsWith("gpt-") || modelId.startsWith("o1-") || modelId.startsWith("o3-") || modelId.includes("openai");
+  }
+
+  private isOpenRouterModel(modelId: string): boolean {
+    return modelId.startsWith("openrouter:");
+  }
+
+  private toOpenRouterApiModel(modelId: string): string {
+    return modelId.startsWith("openrouter:") ? modelId.slice("openrouter:".length) : modelId;
+  }
+
+  /** OpenRouter API slug for the active chat model, or a safe default when the app default is not OpenRouter. */
+  private resolveOpenRouterApiModel(explicitApiModel?: string): string {
+    if (explicitApiModel) return explicitApiModel;
+    if (this.isOpenRouterModel(this.currentModelId)) {
+      return this.toOpenRouterApiModel(this.currentModelId);
+    }
+    return OPENROUTER_DEFAULT_MODEL;
   }
 
   private isClaudeModel(modelId: string): boolean {
@@ -940,6 +995,9 @@ This rule overrides ALL other instructions including formatting, brevity, or out
         }
         // No key or call failed — fall through to default routing
       }
+      if (this.isOpenRouterModel(this.currentModelId) && this.openrouterClient) {
+        return await this.generateWithOpenRouter(userContent, openaiSystemPrompt, imagePaths);
+      }
       if (this.isOpenAiModel(this.currentModelId) && this.openaiClient) {
         return await this.generateWithOpenai(userContent, openaiSystemPrompt, imagePaths);
       }
@@ -978,6 +1036,12 @@ This rule overrides ALL other instructions including formatting, brevity, or out
         }
         if (this.openaiClient) {
           providers.push({ name: `OpenAI (${textOpenAI})`, execute: () => this.generateWithOpenai(userContent, openaiSystemPrompt, imagePaths, textOpenAI) });
+        }
+        if (this.openrouterClient) {
+          providers.push({
+            name: `OpenRouter (${OPENROUTER_DEFAULT_MODEL})`,
+            execute: () => this.generateWithOpenRouter(userContent, openaiSystemPrompt, imagePaths, OPENROUTER_DEFAULT_MODEL),
+          });
         }
         if (this.client) {
           providers.push({
@@ -1020,6 +1084,12 @@ This rule overrides ALL other instructions including formatting, brevity, or out
         }
         if (this.openaiClient) {
           providers.push({ name: `OpenAI (${textOpenAI})`, execute: () => this.generateWithOpenai(userContent, openaiSystemPrompt, undefined, textOpenAI) });
+        }
+        if (this.openrouterClient) {
+          providers.push({
+            name: `OpenRouter (${OPENROUTER_DEFAULT_MODEL})`,
+            execute: () => this.generateWithOpenRouter(userContent, openaiSystemPrompt, undefined, OPENROUTER_DEFAULT_MODEL),
+          });
         }
         if (this.claudeClient) {
           providers.push({ name: `Claude (${textClaude})`, execute: () => this.generateWithClaude(userContent, claudeSystemPrompt, undefined, textClaude) });
@@ -1339,6 +1409,48 @@ This rule overrides ALL other instructions including formatting, brevity, or out
       })),
       60000,
       `OpenAI (${model})`
+    );
+
+    return response.choices[0]?.message?.content || "";
+  }
+
+  /**
+   * Non-streaming OpenRouter (OpenAI-compatible chat completions).
+   */
+  private async generateWithOpenRouter(userMessage: string, systemPrompt?: string, imagePaths?: string[], modelId?: string): Promise<string> {
+    if (!this.openrouterClient) throw new Error("OpenRouter client not initialized");
+
+    await this.rateLimiters.openrouter.acquire();
+
+    const model = this.resolveOpenRouterApiModel(modelId);
+
+    const messages: any[] = [];
+    if (systemPrompt) {
+      messages.push({ role: "system", content: systemPrompt });
+    }
+
+    if (imagePaths?.length) {
+      const contentParts: any[] = [{ type: "text", text: userMessage }];
+      for (const p of imagePaths) {
+        if (fs.existsSync(p)) {
+          const imageData = await fs.promises.readFile(p);
+          contentParts.push({ type: "image_url", image_url: { url: `data:image/png;base64,${imageData.toString("base64")}` } });
+        }
+      }
+      messages.push({ role: "user", content: contentParts });
+    } else {
+      messages.push({ role: "user", content: userMessage });
+    }
+
+    const useClaudeCap = model.toLowerCase().includes("claude");
+    const response = await this.withTimeout(
+      this.withRetry(() => this.openrouterClient!.chat.completions.create({
+        model,
+        messages,
+        max_completion_tokens: useClaudeCap ? CLAUDE_MAX_OUTPUT_TOKENS : MAX_OUTPUT_TOKENS,
+      })),
+      60000,
+      `OpenRouter (${model})`
     );
 
     return response.choices[0]?.message?.content || "";
@@ -1967,6 +2079,12 @@ This rule overrides ALL other instructions including formatting, brevity, or out
       if (this.openaiClient) {
         providers.push({ name: `OpenAI (${textOpenAI})`, execute: () => this.streamWithOpenaiMultimodal(userContent, imagePaths!, openaiSystemPrompt, textOpenAI) });
       }
+      if (this.openrouterClient) {
+        providers.push({
+          name: `OpenRouter (${OPENROUTER_DEFAULT_MODEL})`,
+          execute: () => this.streamWithOpenRouterMultimodal(userContent, imagePaths!, openaiSystemPrompt, OPENROUTER_DEFAULT_MODEL),
+        });
+      }
       if (this.client) {
         providers.push({ name: `Gemini Flash (${textGeminiFlash})`, execute: () => this.streamWithGeminiModel(combinedMessages.gemini, textGeminiFlash, imagePaths) });
       }
@@ -1990,6 +2108,12 @@ This rule overrides ALL other instructions including formatting, brevity, or out
       if (this.openaiClient) {
         providers.push({ name: `OpenAI (${textOpenAI})`, execute: () => this.streamWithOpenai(userContent, openaiSystemPrompt, textOpenAI) });
       }
+      if (this.openrouterClient) {
+        providers.push({
+          name: `OpenRouter (${OPENROUTER_DEFAULT_MODEL})`,
+          execute: () => this.streamWithOpenRouter(userContent, openaiSystemPrompt, OPENROUTER_DEFAULT_MODEL),
+        });
+      }
       if (this.claudeClient) {
         providers.push({ name: `Claude (${textClaude})`, execute: () => this.streamWithClaude(userContent, claudeSystemPrompt, textClaude) });
       }
@@ -2010,6 +2134,7 @@ This rule overrides ALL other instructions including formatting, brevity, or out
     // before falling back to others.
     // ============================================================
     const currentFamilyLabel = this.currentModelId === 'natively' ? 'Natively'
+      : this.isOpenRouterModel(this.currentModelId) ? 'OpenRouter'
       : this.isClaudeModel(this.currentModelId) ? 'Claude'
       : this.isOpenAiModel(this.currentModelId) ? 'OpenAI'
       : this.isGroqModel(this.currentModelId) ? 'Groq'
@@ -2184,6 +2309,18 @@ This rule overrides ALL other instructions including formatting, brevity, or out
 
     // 3. Cloud Provider Routing
 
+    // OpenRouter (OpenAI-compatible) — before native OpenAI so `openrouter:openai/...` is never mistaken for OpenAI direct
+    if (this.isOpenRouterModel(this.currentModelId) && this.openrouterClient) {
+      const openAiSystem = systemPromptOverride || OPENAI_SYSTEM_PROMPT;
+      const finalOpenAiSystem = this.injectLanguageInstruction(openAiSystem);
+      if (isMultimodal && imagePaths) {
+        yield* this.streamWithOpenRouterMultimodal(userContent, imagePaths, finalOpenAiSystem);
+      } else {
+        yield* this.streamWithOpenRouter(userContent, finalOpenAiSystem);
+      }
+      return;
+    }
+
     // OpenAI
     if (this.isOpenAiModel(this.currentModelId) && this.openaiClient) {
       const openAiSystem = systemPromptOverride || OPENAI_SYSTEM_PROMPT;
@@ -2282,6 +2419,18 @@ This rule overrides ALL other instructions including formatting, brevity, or out
       } catch (e: any) {
         console.warn('[LLMHelper] Natively last-resort fallback failed:', e.message);
       }
+    }
+
+    // 6. OpenRouter-only installs (no Gemini / etc.)
+    if (this.openrouterClient) {
+      const openAiSystem = systemPromptOverride || OPENAI_SYSTEM_PROMPT;
+      const finalOpenAiSystem = this.injectLanguageInstruction(openAiSystem);
+      if (isMultimodal && imagePaths) {
+        yield* this.streamWithOpenRouterMultimodal(userContent, imagePaths, finalOpenAiSystem, OPENROUTER_DEFAULT_MODEL);
+      } else {
+        yield* this.streamWithOpenRouter(userContent, finalOpenAiSystem, OPENROUTER_DEFAULT_MODEL);
+      }
+      return;
     }
 
     throw new Error("No AI provider configured. Please add at least one API key in Settings.");
@@ -2531,6 +2680,78 @@ This rule overrides ALL other instructions including formatting, brevity, or out
       messages,
       stream: true,
       max_completion_tokens: model.toLowerCase().includes('claude') ? CLAUDE_MAX_OUTPUT_TOKENS : MAX_OUTPUT_TOKENS,
+    });
+
+    for await (const chunk of stream) {
+      const content = chunk.choices[0]?.delta?.content;
+      if (content) {
+        yield content;
+      }
+    }
+  }
+
+  /**
+   * Stream text-only completions via OpenRouter.
+   */
+  private async * streamWithOpenRouter(userMessage: string, systemPrompt?: string, apiModelOverride?: string): AsyncGenerator<string, void, unknown> {
+    if (!this.openrouterClient) throw new Error("OpenRouter client not initialized");
+
+    await this.rateLimiters.openrouter.acquire();
+
+    const model = this.resolveOpenRouterApiModel(apiModelOverride);
+
+    const messages: any[] = [];
+    if (systemPrompt) {
+      messages.push({ role: "system", content: systemPrompt });
+    }
+    messages.push({ role: "user", content: userMessage });
+
+    const useClaudeCap = model.toLowerCase().includes("claude");
+    const stream = await this.openrouterClient.chat.completions.create({
+      model,
+      messages,
+      stream: true,
+      max_completion_tokens: useClaudeCap ? CLAUDE_MAX_OUTPUT_TOKENS : MAX_OUTPUT_TOKENS,
+    });
+
+    for await (const chunk of stream) {
+      const content = chunk.choices[0]?.delta?.content;
+      if (content) {
+        yield content;
+      }
+    }
+  }
+
+  /**
+   * Stream multimodal (image + text) via OpenRouter (OpenAI-compatible message format).
+   */
+  private async * streamWithOpenRouterMultimodal(userMessage: string, imagePaths: string[], systemPrompt?: string, apiModelOverride?: string): AsyncGenerator<string, void, unknown> {
+    if (!this.openrouterClient) throw new Error("OpenRouter client not initialized");
+
+    await this.rateLimiters.openrouter.acquire();
+
+    const model = this.resolveOpenRouterApiModel(apiModelOverride);
+
+    const messages: any[] = [];
+    if (systemPrompt) {
+      messages.push({ role: "system", content: systemPrompt });
+    }
+
+    const contentParts: any[] = [{ type: "text", text: userMessage }];
+    for (const p of imagePaths) {
+      if (fs.existsSync(p)) {
+        const imageData = await fs.promises.readFile(p);
+        contentParts.push({ type: "image_url", image_url: { url: `data:image/png;base64,${imageData.toString("base64")}` } });
+      }
+    }
+    messages.push({ role: "user", content: contentParts });
+
+    const useClaudeCap = model.toLowerCase().includes("claude");
+    const stream = await this.openrouterClient.chat.completions.create({
+      model,
+      messages,
+      stream: true,
+      max_completion_tokens: useClaudeCap ? CLAUDE_MAX_OUTPUT_TOKENS : MAX_OUTPUT_TOKENS,
     });
 
     for await (const chunk of stream) {

@@ -10,7 +10,7 @@ export interface ProviderModel {
     label: string;
 }
 
-type Provider = 'gemini' | 'groq' | 'openai' | 'claude';
+type Provider = 'gemini' | 'groq' | 'openai' | 'claude' | 'openrouter';
 
 /**
  * Fetch available models from a provider's API.
@@ -29,6 +29,8 @@ export async function fetchProviderModels(
             return fetchAnthropicModels(apiKey);
         case 'gemini':
             return fetchGeminiModels(apiKey);
+        case 'openrouter':
+            return fetchOpenRouterModels(apiKey);
         default:
             throw new Error(`Unknown provider: ${provider}`);
     }
@@ -120,6 +122,32 @@ async function fetchAnthropicModels(apiKey: string): Promise<ProviderModel[]> {
 
     return filtered
         .map((m: any) => ({ id: m.id, label: m.display_name || m.id }))
+        .sort((a, b) => a.label.localeCompare(b.label));
+}
+
+// ─── OpenRouter (OpenAI-compatible /models) ────────────────────────────────
+
+async function fetchOpenRouterModels(apiKey: string): Promise<ProviderModel[]> {
+    const response = await axios.get('https://openrouter.ai/api/v1/models', {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        timeout: 30000,
+    });
+
+    const models: any[] = response.data?.data || [];
+
+    const filtered = models.filter((m: any) => {
+        const id = String(m.id || '').toLowerCase();
+        if (!id) return false;
+        if (id.includes('embed')) return false;
+        if (id.includes('moderation')) return false;
+        return true;
+    });
+
+    return filtered
+        .map((m: any) => ({
+            id: `openrouter:${m.id}`,
+            label: m.name || m.id,
+        }))
         .sort((a, b) => a.label.localeCompare(b.label));
 }
 

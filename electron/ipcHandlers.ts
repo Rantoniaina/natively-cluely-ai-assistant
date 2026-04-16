@@ -844,6 +844,24 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
+  safeHandle("set-openrouter-api-key", async (_, apiKey: string) => {
+    try {
+      const { CredentialsManager } = require('./services/CredentialsManager');
+      CredentialsManager.getInstance().setOpenrouterApiKey(apiKey);
+
+      const llmHelper = appState.processingHelper.getLLMHelper();
+      llmHelper.setOpenrouterApiKey(apiKey);
+
+      appState.getIntelligenceManager().resetEngine();
+      appState.getIntelligenceManager().initializeLLMs();
+
+      return { success: true };
+    } catch (error: any) {
+      console.error("Error saving OpenRouter API key:", error);
+      return { success: false, error: error.message };
+    }
+  });
+
   // ── Usage cache (60-second TTL, keyed by API key) ──────────────────────────
   const _usageCache = new Map<string, { data: any; ts: number }>();
   const USAGE_CACHE_TTL_MS = 60_000;
@@ -1353,6 +1371,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         hasGroqKey: hasKey(creds.groqApiKey),
         hasOpenaiKey: hasKey(creds.openaiApiKey),
         hasClaudeKey: hasKey(creds.claudeApiKey),
+        hasOpenrouterKey: hasKey(creds.openrouterApiKey),
         hasNativelyKey: hasKey(creds.nativelyApiKey),
         googleServiceAccountPath: creds.googleServiceAccountPath || null,
         sttProvider: creds.sttProvider || 'none',
@@ -1382,9 +1401,10 @@ export function initializeIpcHandlers(appState: AppState): void {
         groqPreferredModel: creds.groqPreferredModel || undefined,
         openaiPreferredModel: creds.openaiPreferredModel || undefined,
         claudePreferredModel: creds.claudePreferredModel || undefined,
+        openrouterPreferredModel: creds.openrouterPreferredModel || undefined,
       };
     } catch (error: any) {
-      return { hasGeminiKey: false, hasGroqKey: false, hasOpenaiKey: false, hasClaudeKey: false, hasNativelyKey: false, googleServiceAccountPath: null, sttProvider: 'none', groqSttModel: 'whisper-large-v3-turbo', hasSttGroqKey: false, hasSttOpenaiKey: false, hasDeepgramKey: false, hasElevenLabsKey: false, hasAzureKey: false, azureRegion: 'eastus', hasIbmWatsonKey: false, ibmWatsonRegion: 'us-south', hasSonioxKey: false, hasTavilyKey: false, sttGroqKey: '', sttOpenaiKey: '', sttDeepgramKey: '', sttElevenLabsKey: '', sttAzureKey: '', sttIbmKey: '', sttSonioxKey: '' };
+      return { hasGeminiKey: false, hasGroqKey: false, hasOpenaiKey: false, hasClaudeKey: false, hasOpenrouterKey: false, hasNativelyKey: false, googleServiceAccountPath: null, sttProvider: 'none', groqSttModel: 'whisper-large-v3-turbo', hasSttGroqKey: false, hasSttOpenaiKey: false, hasDeepgramKey: false, hasElevenLabsKey: false, hasAzureKey: false, azureRegion: 'eastus', hasIbmWatsonKey: false, ibmWatsonRegion: 'us-south', hasSonioxKey: false, hasTavilyKey: false, sttGroqKey: '', sttOpenaiKey: '', sttDeepgramKey: '', sttElevenLabsKey: '', sttAzureKey: '', sttIbmKey: '', sttSonioxKey: '' };
     }
   });
 
@@ -1392,7 +1412,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   // Dynamic Model Discovery Handlers
   // ==========================================
 
-  safeHandle("fetch-provider-models", async (_, provider: 'gemini' | 'groq' | 'openai' | 'claude', apiKey: string) => {
+  safeHandle("fetch-provider-models", async (_, provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'openrouter', apiKey: string) => {
     try {
       // Fall back to stored key if no key was explicitly provided
       let key = apiKey?.trim();
@@ -1403,6 +1423,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         else if (provider === 'groq') key = cm.getGroqApiKey();
         else if (provider === 'openai') key = cm.getOpenaiApiKey();
         else if (provider === 'claude') key = cm.getClaudeApiKey();
+        else if (provider === 'openrouter') key = cm.getOpenrouterApiKey();
       }
 
       if (!key) {
@@ -1419,7 +1440,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("set-provider-preferred-model", async (_, provider: 'gemini' | 'groq' | 'openai' | 'claude', modelId: string) => {
+  safeHandle("set-provider-preferred-model", async (_, provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'openrouter', modelId: string) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setPreferredModel(provider, modelId);
@@ -1788,7 +1809,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("test-llm-connection", async (_, provider: 'gemini' | 'groq' | 'openai' | 'claude', apiKey?: string) => {
+  safeHandle("test-llm-connection", async (_, provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'openrouter', apiKey?: string) => {
     console.log(`[IPC] Received test-llm-connection request for provider: ${provider}`);
     try {
       if (!apiKey || !apiKey.trim()) {
@@ -1798,6 +1819,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         else if (provider === 'groq') apiKey = creds.getGroqApiKey();
         else if (provider === 'openai') apiKey = creds.getOpenaiApiKey();
         else if (provider === 'claude') apiKey = creds.getClaudeApiKey();
+        else if (provider === 'openrouter') apiKey = creds.getOpenrouterApiKey();
       }
 
       if (!apiKey || !apiKey.trim()) {
@@ -1843,6 +1865,19 @@ export function initializeIpcHandlers(appState: AppState): void {
             'content-type': 'application/json'
           },
           timeout: 15000
+        });
+      } else if (provider === 'openrouter') {
+        response = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
+          model: "openai/gpt-4o-mini",
+          messages: [{ role: "user", content: "Hello" }]
+        }, {
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': 'https://natively.com',
+            'X-OpenRouter-Title': 'Natively',
+          },
+          timeout: 20000
         });
       }
 

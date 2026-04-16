@@ -3,7 +3,7 @@ export const STANDARD_CLOUD_MODELS: Record<string, {
     ids: string[];
     names: string[];
     descs: string[];
-    pmKey: 'geminiPreferredModel' | 'openaiPreferredModel' | 'claudePreferredModel' | 'groqPreferredModel';
+    pmKey: 'geminiPreferredModel' | 'openaiPreferredModel' | 'claudePreferredModel' | 'groqPreferredModel' | 'openrouterPreferredModel';
 }> = {
     gemini: {
         hasKeyCheck: (creds) => !!creds?.hasGeminiKey,
@@ -32,6 +32,13 @@ export const STANDARD_CLOUD_MODELS: Record<string, {
         names: ['Groq Llama 3.3'],
         descs: ['Ultra Fast'],
         pmKey: 'groqPreferredModel'
+    },
+    openrouter: {
+        hasKeyCheck: (creds) => !!creds?.hasOpenrouterKey,
+        ids: ['openrouter:openai/gpt-4o-mini'],
+        names: ['GPT-4o Mini'],
+        descs: ['OpenRouter • Many models'],
+        pmKey: 'openrouterPreferredModel'
     },
 };
 

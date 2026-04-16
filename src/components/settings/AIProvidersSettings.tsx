@@ -83,6 +83,7 @@ export const AIProvidersSettings: React.FC = () => {
     const [groqApiKey, setGroqApiKey] = useState('');
     const [openaiApiKey, setOpenaiApiKey] = useState('');
     const [claudeApiKey, setClaudeApiKey] = useState('');
+    const [openrouterApiKey, setOpenrouterApiKey] = useState('');
 
     // Status
     const [savedStatus, setSavedStatus] = useState<Record<string, boolean>>({});
@@ -132,6 +133,7 @@ export const AIProvidersSettings: React.FC = () => {
                         groq: creds.hasGroqKey,
                         openai: creds.hasOpenaiKey,
                         claude: creds.hasClaudeKey,
+                        openrouter: creds.hasOpenrouterKey || false,
                         natively: creds.hasNativelyKey || false
                     });
                     // Load preferred models
@@ -140,6 +142,7 @@ export const AIProvidersSettings: React.FC = () => {
                     if (creds.groqPreferredModel) pm.groq = creds.groqPreferredModel;
                     if (creds.openaiPreferredModel) pm.openai = creds.openaiPreferredModel;
                     if (creds.claudePreferredModel) pm.claude = creds.claudePreferredModel;
+                    if (creds.openrouterPreferredModel) pm.openrouter = creds.openrouterPreferredModel;
                     setPreferredModels(pm);
                 }
 
@@ -284,6 +287,7 @@ export const AIProvidersSettings: React.FC = () => {
             if (provider === 'openai') result = await window.electronAPI.setOpenaiApiKey(key);
             // @ts-ignore
             if (provider === 'claude') result = await window.electronAPI.setClaudeApiKey(key);
+            if (provider === 'openrouter') result = await window.electronAPI.setOpenrouterApiKey(key);
 
             if (result && result.success) {
                 setSavedStatus(prev => ({ ...prev, [provider]: true }));
@@ -310,6 +314,7 @@ export const AIProvidersSettings: React.FC = () => {
             if (provider === 'openai') result = await window.electronAPI.setOpenaiApiKey('');
             // @ts-ignore
             if (provider === 'claude') result = await window.electronAPI.setClaudeApiKey('');
+            if (provider === 'openrouter') result = await window.electronAPI.setOpenrouterApiKey('');
 
             if (result && result.success) {
                 setHasStoredKey(prev => ({ ...prev, [provider]: false }));
@@ -349,7 +354,8 @@ export const AIProvidersSettings: React.FC = () => {
             gemini: 'https://aistudio.google.com/app/apikey',
             groq: 'https://console.groq.com/keys',
             openai: 'https://platform.openai.com/api-keys',
-            claude: 'https://console.anthropic.com/settings/keys'
+            claude: 'https://console.anthropic.com/settings/keys',
+            openrouter: 'https://openrouter.ai/settings/keys'
         };
         // @ts-ignore
         window.electronAPI?.openExternal(urls[provider]);
@@ -596,6 +602,26 @@ export const AIProvidersSettings: React.FC = () => {
                         keyPlaceholder="sk-ant-..."
                         keyUrl="https://console.anthropic.com/settings/keys"
                         onPreferredModelChange={(model) => setPreferredModels(prev => ({ ...prev, claude: model }))}
+                    />
+
+                    {/* OpenRouter */}
+                    <ProviderCard
+                        providerId="openrouter"
+                        providerName="OpenRouter"
+                        apiKey={openrouterApiKey}
+                        preferredModel={preferredModels.openrouter}
+                        hasStoredKey={!!hasStoredKey.openrouter}
+                        onKeyChange={setOpenrouterApiKey}
+                        onSaveKey={async () => { await handleSaveKey('openrouter', openrouterApiKey, setOpenrouterApiKey); }}
+                        onRemoveKey={() => handleRemoveKey('openrouter', setOpenrouterApiKey)}
+                        onTestConnection={() => handleTestConnection('openrouter', openrouterApiKey)}
+                        testStatus={testStatus.openrouter || 'idle'}
+                        testError={testError.openrouter}
+                        savingStatus={!!savingStatus.openrouter}
+                        savedStatus={!!savedStatus.openrouter}
+                        keyPlaceholder="sk-or-..."
+                        keyUrl="https://openrouter.ai/settings/keys"
+                        onPreferredModelChange={(model) => setPreferredModels(prev => ({ ...prev, openrouter: model }))}
                     />
 
                 </div>
