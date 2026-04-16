@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Plus, Trash2, Edit2, AlertCircle, CheckCircle, Save, ChevronDown, Check, RefreshCw, ExternalLink, Loader2 } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { Plus, Trash2, Edit2, AlertCircle, CheckCircle, Save, ChevronDown, Check, RefreshCw, ExternalLink, Loader2, Search } from 'lucide-react';
 import { STANDARD_CLOUD_MODELS, prettifyModelId } from '../../utils/modelUtils';
 import { validateCurl } from '../../lib/curl-validator';
 import { ProviderCard } from './ProviderCard';
@@ -23,9 +23,26 @@ interface ModelSelectProps {
     placeholder?: string;
 }
 
+/** Long lists (e.g. OpenRouter catalog): show a filter field above options */
+const MODEL_SELECT_SEARCH_THRESHOLD = 12;
+
 const ModelSelect: React.FC<ModelSelectProps> = ({ value, options, onChange, placeholder = "Select model" }) => {
     const [isOpen, setIsOpen] = useState(false);
-    const containerRef = React.useRef<HTMLDivElement>(null);
+    const [filterQuery, setFilterQuery] = useState('');
+    const containerRef = useRef<HTMLDivElement>(null);
+    const searchInputRef = useRef<HTMLInputElement>(null);
+
+    const showSearch = options.length > MODEL_SELECT_SEARCH_THRESHOLD;
+
+    const filteredOptions = useMemo(() => {
+        const q = filterQuery.trim().toLowerCase();
+        if (!q) return options;
+        return options.filter(
+            (o) =>
+                o.name.toLowerCase().includes(q) ||
+                o.id.toLowerCase().includes(q)
+        );
+    }, [options, filterQuery]);
 
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
@@ -37,13 +54,24 @@ const ModelSelect: React.FC<ModelSelectProps> = ({ value, options, onChange, pla
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
+    useEffect(() => {
+        if (!isOpen) {
+            setFilterQuery('');
+            return;
+        }
+        if (showSearch) {
+            const id = requestAnimationFrame(() => searchInputRef.current?.focus());
+            return () => cancelAnimationFrame(id);
+        }
+    }, [isOpen, showSearch]);
+
     const selectedOption = options.find(o => o.id === value);
 
     return (
         <div className="relative" ref={containerRef}>
             <button
                 onClick={() => setIsOpen(!isOpen)}
-                className="w-40 bg-bg-input border border-border-subtle rounded-lg px-3 py-1.5 text-xs text-text-primary focus:outline-none focus:border-accent-primary flex items-center justify-between hover:bg-bg-elevated transition-colors"
+                className="min-w-[12rem] max-w-[20rem] bg-bg-input border border-border-subtle rounded-lg px-3 py-1.5 text-xs text-text-primary focus:outline-none focus:border-accent-primary flex items-center justify-between hover:bg-bg-elevated transition-colors"
                 type="button"
             >
                 <span className="truncate pr-2">{selectedOption ? selectedOption.name : placeholder}</span>
@@ -51,9 +79,39 @@ const ModelSelect: React.FC<ModelSelectProps> = ({ value, options, onChange, pla
             </button>
 
             {isOpen && (
-                <div className="absolute top-full right-0 mt-1 w-full bg-bg-elevated border border-border-subtle rounded-lg shadow-xl z-50 max-h-60 overflow-y-auto animated fadeIn">
-                    <div className="p-1 space-y-0.5">
-                        {options.map((option) => (
+                <div
+                    className={`absolute top-full right-0 mt-1 bg-bg-elevated border border-border-subtle rounded-lg shadow-xl z-50 animated fadeIn ${
+                        showSearch
+                            ? 'flex flex-col overflow-hidden min-w-full w-max max-w-[min(28rem,calc(100vw-2rem))] max-h-80'
+                            : 'w-full max-h-60 overflow-y-auto'
+                    }`}
+                >
+                    {showSearch && (
+                        <div className="shrink-0 p-2 border-b border-border-subtle">
+                            <div className="relative">
+                                <Search
+                                    size={14}
+                                    className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-tertiary pointer-events-none"
+                                    aria-hidden
+                                />
+                                <input
+                                    ref={searchInputRef}
+                                    type="search"
+                                    value={filterQuery}
+                                    onChange={(e) => setFilterQuery(e.target.value)}
+                                    placeholder="Search models…"
+                                    className="w-full bg-bg-input border border-border-subtle rounded-md py-1.5 pl-8 pr-2 text-xs text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent-primary"
+                                    onKeyDown={(e) => e.stopPropagation()}
+                                />
+                            </div>
+                        </div>
+                    )}
+                    <div
+                        className={`p-1 space-y-0.5 ${
+                            showSearch ? 'min-h-0 flex-1 overflow-y-auto max-h-[min(16rem,50vh)]' : ''
+                        }`}
+                    >
+                        {filteredOptions.map((option) => (
                             <button
                                 key={option.id}
                                 onClick={() => {
@@ -69,6 +127,9 @@ const ModelSelect: React.FC<ModelSelectProps> = ({ value, options, onChange, pla
                         ))}
                         {options.length === 0 && (
                             <div className="px-3 py-2 text-xs text-gray-500 italic">No models available</div>
+                        )}
+                        {options.length > 0 && filteredOptions.length === 0 && (
+                            <div className="px-3 py-2 text-xs text-text-tertiary italic">No models match your search</div>
                         )}
                     </div>
                 </div>
@@ -116,6 +177,46 @@ export const AIProvidersSettings: React.FC = () => {
 
     // --- Dynamic Model Discovery ---
     const [preferredModels, setPreferredModels] = useState<Record<string, string>>({});
+
+    /** Full OpenRouter catalog (from https://openrouter.ai/api/v1/models) for Active Model picker */
+    const [openRouterCatalog, setOpenRouterCatalog] = useState<{ id: string; name: string }[]>([]);
+    const [openRouterCatalogLoading, setOpenRouterCatalogLoading] = useState(false);
+
+    const loadOpenRouterCatalog = useCallback(async () => {
+        try {
+            // @ts-ignore
+            const result = await window.electronAPI?.fetchProviderModels?.('openrouter', '');
+            if (result?.success && result.models?.length) {
+                setOpenRouterCatalog(
+                    result.models.map((m: { id: string; label: string }) => ({ id: m.id, name: m.label }))
+                );
+            } else {
+                setOpenRouterCatalog([]);
+                if (result && !result.success && result.error) {
+                    console.warn('[AIProviders] OpenRouter catalog:', result.error);
+                }
+            }
+        } catch (e) {
+            console.error('[AIProviders] OpenRouter catalog fetch failed:', e);
+            setOpenRouterCatalog([]);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (!credentialsLoaded || !hasStoredKey.openrouter) {
+            setOpenRouterCatalog([]);
+            setOpenRouterCatalogLoading(false);
+            return;
+        }
+        let cancelled = false;
+        setOpenRouterCatalogLoading(true);
+        loadOpenRouterCatalog().finally(() => {
+            if (!cancelled) setOpenRouterCatalogLoading(false);
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, [credentialsLoaded, hasStoredKey.openrouter, loadOpenRouterCatalog]);
 
     // Load Initial Data
     useEffect(() => {
@@ -443,42 +544,69 @@ export const AIProvidersSettings: React.FC = () => {
                     <p className="text-xs text-text-secondary mb-2">Primary model for new chats. Other configured models act as fallbacks.</p>
                 </div>
 
-                <div className="bg-bg-item-surface rounded-xl p-5 border border-border-subtle flex items-center justify-between">
-                    <div>
+                <div className="bg-bg-item-surface rounded-xl p-5 border border-border-subtle flex items-center justify-between gap-3">
+                    <div className="min-w-0 flex-1">
                         <label className="block text-xs font-medium text-text-primary uppercase tracking-wide mb-0">Active Model</label>
                         <p className="text-[10px] text-text-secondary">Applies to new chats instantly.</p>
+                        {hasStoredKey.openrouter && openRouterCatalog.length === 0 && !openRouterCatalogLoading && (
+                            <p className="text-[10px] text-text-tertiary mt-1">OpenRouter models load from your saved key; use Refresh if the list is empty.</p>
+                        )}
                     </div>
-                    <ModelSelect
-                        value={defaultModel}
-                        options={(() => {
-                            const opts: { id: string; name: string }[] = [];
+                    <div className="flex items-center gap-2 shrink-0">
+                        {hasStoredKey.openrouter && (
+                            <button
+                                type="button"
+                                title="Reload models from OpenRouter"
+                                disabled={openRouterCatalogLoading}
+                                onClick={() => {
+                                    setOpenRouterCatalogLoading(true);
+                                    loadOpenRouterCatalog().finally(() => setOpenRouterCatalogLoading(false));
+                                }}
+                                className="p-2 rounded-lg border border-border-subtle text-text-secondary hover:text-text-primary hover:bg-bg-elevated transition-colors disabled:opacity-50"
+                            >
+                                {openRouterCatalogLoading ? (
+                                    <Loader2 size={16} className="animate-spin" />
+                                ) : (
+                                    <RefreshCw size={16} />
+                                )}
+                            </button>
+                        )}
+                        <ModelSelect
+                            value={defaultModel}
+                            options={(() => {
+                                const opts: { id: string; name: string }[] = [];
 
-                            if (hasStoredKey.natively) {
-                                opts.push({ id: 'natively', name: 'Natively API' });
-                            }
-
-                            for (const [prov, cfg] of Object.entries(STANDARD_CLOUD_MODELS)) {
-                                if (!hasStoredKey[prov as keyof typeof hasStoredKey]) continue;
-                                cfg.ids.forEach((id, i) => opts.push({ id, name: cfg.names[i] }));
-                                const pm = preferredModels[prov as keyof typeof preferredModels];
-                                if (pm && !cfg.ids.includes(pm)) {
-                                    opts.push({ id: pm, name: prettifyModelId(pm) });
+                                if (hasStoredKey.natively) {
+                                    opts.push({ id: 'natively', name: 'Natively API' });
                                 }
-                            }
-                            customProviders.forEach(p => opts.push({ id: p.id, name: p.name }));
-                            ollamaModels.forEach(m => opts.push({ id: `ollama-${m}`, name: `${m} (Local)` }));
-                            
-                            if (defaultModel && !opts.find(o => o.id === defaultModel)) {
-                                opts.unshift({ id: defaultModel, name: prettifyModelId(defaultModel) });
-                            }
-                            return opts;
-                        })()}
-                        onChange={(val) => {
-                            setDefaultModel(val);
-                            // @ts-ignore - persist as default + update runtime + broadcast
-                            window.electronAPI?.setDefaultModel(val).catch(console.error);
-                        }}
-                    />
+
+                                for (const [prov, cfg] of Object.entries(STANDARD_CLOUD_MODELS)) {
+                                    if (!hasStoredKey[prov as keyof typeof hasStoredKey]) continue;
+                                    if (prov === 'openrouter' && openRouterCatalog.length > 0) {
+                                        openRouterCatalog.forEach((m) => opts.push({ id: m.id, name: m.name }));
+                                        continue;
+                                    }
+                                    cfg.ids.forEach((id, i) => opts.push({ id, name: cfg.names[i] }));
+                                    const pm = preferredModels[prov as keyof typeof preferredModels];
+                                    if (pm && !cfg.ids.includes(pm)) {
+                                        opts.push({ id: pm, name: prettifyModelId(pm) });
+                                    }
+                                }
+                                customProviders.forEach(p => opts.push({ id: p.id, name: p.name }));
+                                ollamaModels.forEach(m => opts.push({ id: `ollama-${m}`, name: `${m} (Local)` }));
+
+                                if (defaultModel && !opts.find(o => o.id === defaultModel)) {
+                                    opts.unshift({ id: defaultModel, name: prettifyModelId(defaultModel) });
+                                }
+                                return opts;
+                            })()}
+                            onChange={(val) => {
+                                setDefaultModel(val);
+                                // @ts-ignore - persist as default + update runtime + broadcast
+                                window.electronAPI?.setDefaultModel(val).catch(console.error);
+                            }}
+                        />
+                    </div>
                 </div>
 
                 {/* Fast Response Mode */}
