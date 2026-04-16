@@ -6,6 +6,7 @@
 import { app, safeStorage } from 'electron';
 import fs from 'fs';
 import path from 'path';
+import { LM_STUDIO_DEFAULT_V1_BASE, normalizeLmStudioV1Base } from '../utils/lmStudioUrl';
 
 const CREDENTIALS_PATH = path.join(app.getPath('userData'), 'credentials.enc');
 
@@ -55,6 +56,8 @@ export interface StoredCredentials {
     openaiPreferredModel?: string;
     claudePreferredModel?: string;
     openrouterPreferredModel?: string;
+    /** OpenAI-compatible local server (LM Studio default: http://127.0.0.1:1234/v1) */
+    lmStudioBaseUrl?: string;
     // Free trial state
     trialToken?:     string;   // server-issued signed token (natively_trial_…)
     trialExpiresAt?: string;   // ISO timestamp — local copy for startup check
@@ -174,6 +177,18 @@ export class CredentialsManager {
     }
     public getDefaultModel(): string {
         return this.credentials.defaultModel || 'gemini-3.1-flash-lite-preview';
+    }
+
+    public getLmStudioBaseUrl(): string {
+        const stored = (this.credentials.lmStudioBaseUrl || '').trim();
+        return normalizeLmStudioV1Base(stored || LM_STUDIO_DEFAULT_V1_BASE);
+    }
+
+    public setLmStudioBaseUrl(url: string): void {
+        const trimmed = url?.trim();
+        this.credentials.lmStudioBaseUrl = trimmed ? normalizeLmStudioV1Base(trimmed) : undefined;
+        this.saveCredentials();
+        console.log('[CredentialsManager] LM Studio base URL updated');
     }
 
     public getNativelyApiKey(): string | undefined {

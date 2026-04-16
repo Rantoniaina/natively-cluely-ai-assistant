@@ -70,6 +70,15 @@ const ModelSelectorWindow = () => {
                     // Ignore ollama errors here
                 }
 
+                let lmStudioModels: string[] = [];
+                try {
+                    // @ts-ignore
+                    const lm = await window.electronAPI?.getLmStudioModels?.();
+                    if (lm && lm.length) lmStudioModels = lm;
+                } catch {
+                    /* ignore */
+                }
+
                 // Build the list
                 const models: ModelOption[] = [];
 
@@ -97,6 +106,10 @@ const ModelSelectorWindow = () => {
                 // Ollama
                 ollamaModels.forEach((m: string) => {
                     models.push({ id: `ollama-${m}`, name: `${m} (Local)`, type: 'ollama' });
+                });
+
+                lmStudioModels.forEach((m: string) => {
+                    models.push({ id: `lmstudio:${m}`, name: `${m} (LM Studio)`, type: 'ollama' });
                 });
 
                 localStorage.setItem('cached-models', JSON.stringify(models));

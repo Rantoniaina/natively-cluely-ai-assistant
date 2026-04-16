@@ -65,6 +65,8 @@ export function detectProviderType(modelName: string): ModelProviderType {
     // Ollama / local model patterns
     if (
         lower.startsWith('ollama:') ||
+        lower.startsWith('ollama-') ||
+        lower.startsWith('lmstudio:') ||
         lower.includes('llama') ||
         lower.includes('mistral') ||
         lower.includes('codellama') ||

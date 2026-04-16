@@ -124,6 +124,9 @@ export class ProcessingHelper {
       console.warn('[ProcessingHelper] ModelVersionManager initialization failed (non-critical):', err.message);
     });
 
+    // LM Studio OpenAI-compatible base URL (used when default model is lmstudio:…)
+    this.llmHelper.setLmStudioBaseUrl(credManager.getLmStudioBaseUrl());
+
     // NEW: Load Default Model Config
     const defaultModel = credManager.getDefaultModel();
     if (defaultModel) {

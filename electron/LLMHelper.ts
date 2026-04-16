@@ -19,6 +19,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import axios from 'axios';
 import { createProviderRateLimiters, RateLimiter } from './services/RateLimiter';
+import { LM_STUDIO_DEFAULT_V1_BASE, normalizeLmStudioV1Base } from './utils/lmStudioUrl';
 const execAsync = promisify(exec);
 
 interface OllamaResponse {
@@ -55,6 +56,11 @@ export class LLMHelper {
   private ollamaModel: string = "llama3.2"
   private ollamaUrl: string = "http://localhost:11434"
   private ollamaStartedByApp: boolean = false;
+  /** LM Studio (OpenAI-compatible local server) */
+  private useLmStudio: boolean = false
+  private lmStudioBaseUrl: string = LM_STUDIO_DEFAULT_V1_BASE
+  private lmStudioModel: string = ""
+  private lmStudioClient: OpenAI | null = null
   private geminiModel: string = GEMINI_FLASH_MODEL
   private customProvider: CustomProvider | null = null;
   private activeCurlProvider: CurlProvider | null = null;
@@ -218,6 +224,8 @@ export class LLMHelper {
     this.openaiClient = null;
     this.openrouterClient = null;
     this.claudeClient = null;
+    this.lmStudioClient = null;
+    this.useLmStudio = false;
     // Destroy rate limiters
     if (this.rateLimiters) {
       Object.values(this.rateLimiters).forEach(rl => rl.destroy());
@@ -288,6 +296,8 @@ export class LLMHelper {
 
     if (targetModelId.startsWith('ollama-')) {
       this.useOllama = true;
+      this.useLmStudio = false;
+      this.lmStudioClient = null;
       this.ollamaModel = targetModelId.replace('ollama-', '');
       this.customProvider = null;
       this.activeCurlProvider = null;
@@ -295,9 +305,22 @@ export class LLMHelper {
       return;
     }
 
+    if (targetModelId.startsWith('lmstudio:')) {
+      this.useOllama = false;
+      this.useLmStudio = true;
+      this.customProvider = null;
+      this.activeCurlProvider = null;
+      this.lmStudioModel = targetModelId.slice('lmstudio:'.length);
+      this.ensureLmStudioClient();
+      console.log(`[LLMHelper] Switched to LM Studio: ${this.lmStudioModel}`);
+      return;
+    }
+
     const custom = customProviders.find(p => p.id === targetModelId);
     if (custom) {
       this.useOllama = false;
+      this.useLmStudio = false;
+      this.lmStudioClient = null;
       this.customProvider = custom;
       this.activeCurlProvider = null;
       console.log(`[LLMHelper] Switched to Custom Provider: ${custom.name}`);
@@ -306,6 +329,8 @@ export class LLMHelper {
 
     // Standard Cloud Models
     this.useOllama = false;
+    this.useLmStudio = false;
+    this.lmStudioClient = null;
     this.customProvider = null;
     this.currentModelId = targetModelId;
 
@@ -318,6 +343,8 @@ export class LLMHelper {
 
   public switchToCurl(provider: CurlProvider) {
     this.useOllama = false;
+    this.useLmStudio = false;
+    this.lmStudioClient = null;
     this.customProvider = null;
     this.activeCurlProvider = provider;
     console.log(`[LLMHelper] Switched to cURL provider: ${provider.name}`);
@@ -412,6 +439,213 @@ export class LLMHelper {
         // console.error(`[LLMHelper] Fallback also failed: ${fallbackError.message}`)
       }
     }
+  }
+
+  public setLmStudioBaseUrl(url: string): void {
+    this.lmStudioBaseUrl = normalizeLmStudioV1Base(url || LM_STUDIO_DEFAULT_V1_BASE)
+    if (this.useLmStudio) {
+      this.ensureLmStudioClient()
+    }
+  }
+
+  private ensureLmStudioClient(): void {
+    const base = normalizeLmStudioV1Base(this.lmStudioBaseUrl)
+    this.lmStudioBaseUrl = base
+    this.lmStudioClient = new OpenAI({
+      apiKey: "lm-studio",
+      baseURL: base,
+    })
+  }
+
+  /**
+   * LM Studio / llama.cpp OpenAI-compat: disable Qwen-style "thinking" in the chat template when the server supports it.
+   * Unknown fields are ignored by other local servers. See LM Studio OpenAI compat chat completions.
+   */
+  private buildLmStudioChatStreamingBody(body: {
+    model: string
+    messages: any[]
+    stream: true
+    temperature: number
+    max_tokens: number
+  }): any {
+    return {
+      ...body,
+      chat_template_kwargs: { enable_thinking: false },
+    }
+  }
+
+  private async checkLmStudioAvailable(): Promise<boolean> {
+    const base = normalizeLmStudioV1Base(this.lmStudioBaseUrl)
+    const origin = base.replace(/\/v1$/i, "")
+    try {
+      const r1 = await fetch(`${base}/models`, { method: "GET" })
+      if (r1.ok) return true
+      const r2 = await fetch(`${origin}/api/v1/models`, { method: "GET" })
+      return r2.ok
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * LM Studio exposes two relevant shapes:
+   * - OpenAI compat: GET {base}/v1/models → { data: [{ id }] }
+   * - Native REST:   GET {origin}/api/v1/models → { models: [{ key, selected_variant, type, … }] }
+   * We query both and merge identifiers so discovery works across LM Studio versions.
+   */
+  public async getLmStudioModels(baseUrlOverride?: string): Promise<string[]> {
+    const base = normalizeLmStudioV1Base(baseUrlOverride || this.lmStudioBaseUrl)
+    const origin = base.replace(/\/v1$/i, "")
+    const ids = new Set<string>()
+
+    const add = (s: unknown) => {
+      if (typeof s === "string" && s.trim()) ids.add(s.trim())
+    }
+
+    const collectFromJson = (data: any) => {
+      if (Array.isArray(data?.data)) {
+        for (const m of data.data) {
+          const id = typeof m?.id === "string" ? m.id : ""
+          // OpenAI-compat list can include embedding models; skip for chat picker parity with REST branch
+          if (id && (/embedding/i.test(id) || id.includes("embed-"))) continue
+          add(m?.id)
+          add((m as { model?: string })?.model)
+        }
+      }
+      if (Array.isArray(data?.models)) {
+        for (const raw of data.models) {
+          if (typeof raw === "string") {
+            add(raw)
+            continue
+          }
+          if (!raw || typeof raw !== "object") continue
+          const m = raw as Record<string, unknown>
+          // REST catalog: skip non-chat models when type is explicit
+          const t = m.type
+          if (t === "embedding" || t === "rerank") continue
+
+          add(m.key)
+          add(m.id)
+          add(m.selected_variant)
+          if (Array.isArray(m.variants)) {
+            for (const v of m.variants as unknown[]) add(v)
+          }
+          if (Array.isArray(m.loaded_instances)) {
+            for (const li of m.loaded_instances as Array<Record<string, unknown>>) {
+              if (li && typeof li.id === "string") add(li.id)
+            }
+          }
+        }
+      }
+    }
+
+    const tryFetch = async (url: string): Promise<void> => {
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 8000)
+      try {
+        const response = await fetch(url, {
+          signal: controller.signal,
+          headers: { Accept: "application/json" },
+        })
+        clearTimeout(timeoutId)
+        if (!response.ok) {
+          console.warn(`[LLMHelper] LM Studio GET ${url} -> ${response.status} ${response.statusText}`)
+          return
+        }
+        const data = await response.json()
+        collectFromJson(data)
+      } catch (e: any) {
+        clearTimeout(timeoutId)
+        const msg = e?.name === "AbortError" ? "timeout" : e?.message || String(e)
+        console.warn(`[LLMHelper] LM Studio model list failed (${url}):`, msg)
+      }
+    }
+
+    await tryFetch(`${base}/models`)
+    await tryFetch(`${origin}/api/v1/models`)
+
+    return [...ids].filter(Boolean)
+  }
+
+  private async initializeLmStudioModel(): Promise<void> {
+    this.ensureLmStudioClient()
+    try {
+      const available = await this.getLmStudioModels()
+      if (available.length === 0) return
+      if (!this.lmStudioModel || !available.includes(this.lmStudioModel)) {
+        this.lmStudioModel = available[0]
+      }
+      await this.callLmStudio("Hello")
+    } catch {
+      try {
+        const models = await this.getLmStudioModels()
+        if (models.length > 0) this.lmStudioModel = models[0]
+      } catch { /* ignore */ }
+    }
+  }
+
+  /**
+   * Stream from LM Studio using the same single-user message shape as {@link callLmStudio}
+   * (one combined prompt blob, optional first image). Prefer this in streaming UX paths.
+   */
+  private async * streamLmStudioMonolithicUserPrompt(fullText: string, imagePaths?: string[]): AsyncGenerator<string, void, unknown> {
+    if (!this.lmStudioClient) this.ensureLmStudioClient()
+    if (!this.lmStudioClient) {
+      yield "Error: LM Studio client not initialized."
+      return
+    }
+
+    const imagePath = imagePaths?.[0]
+    let userContent: any = fullText
+    if (imagePath) {
+      try {
+        const imageData = await fs.promises.readFile(imagePath)
+        const b64 = imageData.toString("base64")
+        userContent = [
+          { type: "text", text: fullText },
+          { type: "image_url", image_url: { url: `data:image/png;base64,${b64}` } },
+        ]
+      } catch (e) {
+        console.warn("[LLMHelper] streamLmStudioMonolithicUserPrompt: failed to read image, text only:", e)
+      }
+    }
+
+    try {
+      const stream = (await this.lmStudioClient.chat.completions.create(
+        this.buildLmStudioChatStreamingBody({
+          model: this.lmStudioModel,
+          messages: [{ role: "user", content: userContent }],
+          stream: true,
+          temperature: 0.7,
+          max_tokens: 8192,
+        })
+      )) as unknown as AsyncIterable<{ choices: Array<{ delta?: { content?: string } }> }>
+      for await (const chunk of stream) {
+        const content = chunk.choices[0]?.delta?.content
+        if (content) yield content
+      }
+    } catch (e) {
+      console.error("LM Studio monolithic stream failed", e)
+      yield "Error: Failed to stream from LM Studio."
+    }
+  }
+
+  private async collectLmStudioStream(gen: AsyncGenerator<string, void, unknown>): Promise<string> {
+    let out = ""
+    for await (const chunk of gen) out += chunk
+    return out
+  }
+
+  /** Non-streaming LM Studio call — uses streaming API under the hood (same server work, one code path). */
+  private async callLmStudio(prompt: string, imagePath?: string): Promise<string> {
+    if (!this.lmStudioClient) this.ensureLmStudioClient()
+    if (!this.lmStudioClient) throw new Error("LM Studio client not initialized")
+
+    const text = await this.collectLmStudioStream(
+      this.streamLmStudioMonolithicUserPrompt(prompt, imagePath ? [imagePath] : undefined)
+    )
+    if (!text || !text.trim()) throw new Error("Empty response from LM Studio")
+    return text
   }
 
   /**
@@ -780,6 +1014,8 @@ ANSWER DIRECTLY:`;
     try {
       if (this.useOllama) {
         return await this.callOllama(systemPrompt);
+      } else if (this.useLmStudio && this.lmStudioClient) {
+        return await this.callLmStudio(systemPrompt);
       } else if (this.customProvider || this.activeCurlProvider) {
         // Pass basePrompt (pre-language-injection) as systemPromptOverride so streamChat
         // calls injectLanguageInstruction exactly once. lastQuestion is the clean user message.
@@ -960,6 +1196,10 @@ This rule overrides ALL other instructions including formatting, brevity, or out
 
       if (this.useOllama) {
         return await this.callOllama(combinedMessages.gemini, imagePaths?.[0]);
+      }
+
+      if (this.useLmStudio && this.lmStudioClient) {
+        return await this.callLmStudio(combinedMessages.gemini, imagePaths?.[0]);
       }
 
       if (this.activeCurlProvider) {
@@ -1224,6 +1464,13 @@ This rule overrides ALL other instructions including formatting, brevity, or out
       providers.push({
         name: `Ollama (${this.ollamaModel})`,
         execute: () => this.callOllama(message)
+      });
+    }
+
+    if (this.useLmStudio && this.lmStudioClient && await this.checkLmStudioAvailable()) {
+      providers.push({
+        name: `LM Studio (${this.lmStudioModel})`,
+        execute: () => this.callLmStudio(message)
       });
     }
 
@@ -1727,7 +1974,9 @@ This rule overrides ALL other instructions including formatting, brevity, or out
       }
 
       // Use current model for multimodal (allows Pro fallback)
-      if (this.client) {
+      if (this.useLmStudio && this.lmStudioClient && imagePaths[0]) {
+        rawResponse = await this.callLmStudio(fullMessage, imagePaths[0]);
+      } else if (this.client) {
         rawResponse = await this.generateContent(contents, modelIdOverride);
       } else {
         throw new Error("No LLM provider configured");
@@ -1736,6 +1985,8 @@ This rule overrides ALL other instructions including formatting, brevity, or out
       // Text-only chat
       if (this.useOllama) {
         rawResponse = await this.callOllama(fullMessage);
+      } else if (this.useLmStudio && this.lmStudioClient) {
+        rawResponse = await this.callLmStudio(fullMessage);
       } else if (this.client) {
         rawResponse = await this.generateContent([{ text: fullMessage }], modelIdOverride);
       } else {
@@ -1940,6 +2191,13 @@ This rule overrides ALL other instructions including formatting, brevity, or out
       });
     }
 
+    if (this.useLmStudio && this.lmStudioClient) {
+      localProviders.push({
+        name: `LM Studio (${this.lmStudioModel})`,
+        execute: () => this.callLmStudio(`${systemPrompt}\n\n${userPrompt}`, isMultimodal ? imagePaths[0] : undefined)
+      });
+    }
+
     // ──────────────────────────────────────────────────────────────────
     // Execute 3-tier rotation with exponential backoff between tiers
     // ──────────────────────────────────────────────────────────────────
@@ -2047,6 +2305,11 @@ This rule overrides ALL other instructions including formatting, brevity, or out
     if (this.useOllama) {
       const response = await this.callOllama(combinedMessages.gemini, imagePaths?.[0]);
       yield response;
+      return;
+    }
+
+    if (this.useLmStudio && this.lmStudioClient) {
+      yield* this.streamLmStudioMonolithicUserPrompt(combinedMessages.gemini, imagePaths);
       return;
     }
 
@@ -2284,6 +2547,11 @@ This rule overrides ALL other instructions including formatting, brevity, or out
     // 1. Ollama Streaming
     if (this.useOllama) {
       yield* this.streamWithOllama(message, context, finalSystemPrompt, imagePaths);
+      return;
+    }
+
+    if (this.useLmStudio && this.lmStudioClient) {
+      yield* this.streamWithLmStudio(message, context, finalSystemPrompt, imagePaths);
       return;
     }
 
@@ -2966,6 +3234,54 @@ This rule overrides ALL other instructions including formatting, brevity, or out
     }
   }
 
+  private async * streamWithLmStudio(message: string, context?: string, systemPrompt: string = UNIVERSAL_SYSTEM_PROMPT, imagePaths?: string[]): AsyncGenerator<string, void, unknown> {
+    if (!this.lmStudioClient) this.ensureLmStudioClient()
+    if (!this.lmStudioClient) {
+      yield "Error: LM Studio client not initialized."
+      return
+    }
+
+    const userText = context
+      ? `CONTEXT:\n${context}\n\nUSER MESSAGE:\n${message}`
+      : message
+
+    const messages: any[] = [{ role: "system", content: systemPrompt }]
+
+    if (imagePaths?.length) {
+      const parts: any[] = [{ type: "text", text: userText }]
+      for (const p of imagePaths) {
+        try {
+          const data = await fs.promises.readFile(p)
+          parts.push({ type: "image_url", image_url: { url: `data:image/png;base64,${data.toString("base64")}` } })
+        } catch (e) {
+          console.warn("[LLMHelper] streamWithLmStudio: failed to read image, skipping:", p, e)
+        }
+      }
+      messages.push({ role: "user", content: parts })
+    } else {
+      messages.push({ role: "user", content: userText })
+    }
+
+    try {
+      const stream = (await this.lmStudioClient.chat.completions.create(
+        this.buildLmStudioChatStreamingBody({
+          model: this.lmStudioModel,
+          messages,
+          stream: true,
+          temperature: 0.7,
+          max_tokens: 8192,
+        })
+      )) as unknown as AsyncIterable<{ choices: Array<{ delta?: { content?: string } }> }>
+      for await (const chunk of stream) {
+        const content = chunk.choices[0]?.delta?.content
+        if (content) yield content
+      }
+    } catch (e) {
+      console.error("LM Studio streaming failed", e)
+      yield "Error: Failed to stream from LM Studio."
+    }
+  }
+
   // --- CUSTOM PROVIDER STREAMING ---
   private async * streamWithCustom(message: string, context?: string, imagePaths?: string[], systemPrompt: string = UNIVERSAL_SYSTEM_PROMPT): AsyncGenerator<string, void, unknown> {
     if (!this.customProvider) return;
@@ -3110,6 +3426,10 @@ This rule overrides ALL other instructions including formatting, brevity, or out
     return this.useOllama;
   }
 
+  public isUsingLmStudio(): boolean {
+    return this.useLmStudio;
+  }
+
   public async getOllamaModels(): Promise<string[]> {
     const baseUrl = (this.ollamaUrl || "http://127.0.0.1:11434").replace('localhost', '127.0.0.1');
     
@@ -3175,14 +3495,16 @@ This rule overrides ALL other instructions including formatting, brevity, or out
     }
   }
 
-  public getCurrentProvider(): "ollama" | "gemini" | "custom" {
+  public getCurrentProvider(): "ollama" | "gemini" | "custom" | "lmstudio" {
     if (this.customProvider) return "custom";
+    if (this.useLmStudio) return "lmstudio";
     return this.useOllama ? "ollama" : "gemini";
   }
 
   public getCurrentModel(): string {
     if (this.customProvider) return this.customProvider.name;
     if (this.activeCurlProvider) return this.activeCurlProvider.id;
+    if (this.useLmStudio) return `lmstudio:${this.lmStudioModel}`;
     return this.useOllama ? this.ollamaModel : this.currentModelId;
   }
 
@@ -3578,6 +3900,8 @@ This rule overrides ALL other instructions including formatting, brevity, or out
 
   public async switchToOllama(model?: string, url?: string): Promise<void> {
     this.useOllama = true;
+    this.useLmStudio = false;
+    this.lmStudioClient = null;
     if (url) this.ollamaUrl = url;
 
     if (model) {
@@ -3588,6 +3912,22 @@ This rule overrides ALL other instructions including formatting, brevity, or out
     }
 
     // console.log(`[LLMHelper] Switched to Ollama: ${this.ollamaModel} at ${this.ollamaUrl}`);
+  }
+
+  public async switchToLmStudio(model?: string, baseUrl?: string): Promise<void> {
+    this.useLmStudio = true;
+    this.useOllama = false;
+    this.customProvider = null;
+    this.activeCurlProvider = null;
+    if (baseUrl) {
+      this.lmStudioBaseUrl = normalizeLmStudioV1Base(baseUrl);
+    }
+    this.ensureLmStudioClient();
+    if (model) {
+      this.lmStudioModel = model;
+    } else {
+      await this.initializeLmStudioModel();
+    }
   }
 
   public async switchToGemini(apiKey?: string, modelId?: string): Promise<void> {
@@ -3606,6 +3946,8 @@ This rule overrides ALL other instructions including formatting, brevity, or out
     }
 
     this.useOllama = false;
+    this.useLmStudio = false;
+    this.lmStudioClient = null;
     this.customProvider = null;
     // console.log(`[LLMHelper] Switched to Gemini: ${this.geminiModel}`);
   }
@@ -3613,6 +3955,8 @@ This rule overrides ALL other instructions including formatting, brevity, or out
   public async switchToCustom(provider: CustomProvider): Promise<void> {
     this.customProvider = provider;
     this.useOllama = false;
+    this.useLmStudio = false;
+    this.lmStudioClient = null;
     this.client = null;
     this.groqClient = null;
     this.openaiClient = null;
@@ -3629,6 +3973,13 @@ This rule overrides ALL other instructions including formatting, brevity, or out
         }
         // Test with a simple prompt
         await this.callOllama("Hello");
+        return { success: true };
+      } else if (this.useLmStudio && this.lmStudioClient) {
+        const available = await this.checkLmStudioAvailable();
+        if (!available) {
+          return { success: false, error: `LM Studio server not reachable at ${this.lmStudioBaseUrl}` };
+        }
+        await this.callLmStudio("Hello");
         return { success: true };
       } else {
         if (!this.client) {

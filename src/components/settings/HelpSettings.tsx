@@ -1181,6 +1181,20 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
                         </div>
 
                         <div className="space-y-3 pt-4">
+                             <h4 className="font-bold text-lg text-text-primary border-b border-border-subtle pb-2">2b. Local server (LM Studio)</h4>
+                             <div className="p-4 rounded-xl border bg-bg-item-surface border-border-subtle space-y-3">
+                                 <p className="text-xs opacity-90 leading-relaxed text-text-secondary">
+                                     LM Studio can serve models over an OpenAI-compatible HTTP API. In <strong>Settings → AI Providers</strong>, set the server URL (default <span className={kbdClass}>http://127.0.0.1:1234</span>), save, then refresh. Loaded models appear in <strong>Default Model for Chat</strong> as <span className={kbdClass}>lmstudio:model-id</span>.
+                                 </p>
+                                 <ol className="list-decimal pl-4 text-xs space-y-2 opacity-90 text-text-secondary">
+                                     <li>Install LM Studio from <button onClick={() => { (window as any).electronAPI?.openExternal('https://lmstudio.ai') }} className="text-accent-primary hover:underline inline-flex items-center gap-1 font-medium">lmstudio.ai <ExternalLink size={10} /></button></li>
+                                     <li>Download a model, open the <strong>Local Server</strong> tab, load the model, and click <strong>Start Server</strong>.</li>
+                                     <li>In Natively, save the server URL under LM Studio and pick your model as the active default.</li>
+                                 </ol>
+                             </div>
+                        </div>
+
+                        <div className="space-y-3 pt-4">
                              <h4 className="font-bold text-lg text-text-primary border-b border-border-subtle pb-2">3. Custom Providers</h4>
                              <div className="p-4 rounded-xl border bg-bg-item-surface border-border-subtle space-y-3">
                                  <p className="text-xs opacity-90 leading-relaxed text-text-secondary">

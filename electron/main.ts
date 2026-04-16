@@ -1503,7 +1503,9 @@ export class AppState {
       const defaultModel = cm.getDefaultModel();
       const all = [...(cm.getCurlProviders() || []), ...(cm.getCustomProviders() || [])];
       console.log(`[Main] Reverting model to default: ${defaultModel}`);
-      this.processingHelper.getLLMHelper().setModel(defaultModel, all);
+      const llm = this.processingHelper.getLLMHelper();
+      llm.setLmStudioBaseUrl(cm.getLmStudioBaseUrl());
+      llm.setModel(defaultModel, all);
       BrowserWindow.getAllWindows().forEach(win => {
         if (!win.isDestroyed()) win.webContents.send('model-changed', defaultModel);
       });

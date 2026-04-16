@@ -17,6 +17,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ currentModel, onSe
     const [isOpen, setIsOpen] = useState(false);
     const [activeTab, setActiveTab] = useState<'cloud' | 'custom' | 'local'>('cloud');
     const [ollamaModels, setOllamaModels] = useState<string[]>([]);
+    const [lmStudioModels, setLmStudioModels] = useState<string[]>([]);
     const [customProviders, setCustomProviders] = useState<CustomProvider[]>([]);
     const [cloudModels, setCloudModels] = useState<{ id: string; name: string; desc: string; provider: string }[]>([]);
     const dropdownRef = useRef<HTMLDivElement>(null);
@@ -45,6 +46,11 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ currentModel, onSe
                 // Load Ollama
                 const local = await window.electronAPI?.getAvailableOllamaModels() as string[];
                 if (local) setOllamaModels(local);
+
+                // @ts-ignore
+                const lm = (await window.electronAPI?.getLmStudioModels?.()) as string[] | undefined;
+                if (lm?.length) setLmStudioModels(lm);
+                else setLmStudioModels([]);
 
                 // Build dynamic cloud models from credentials
                 // @ts-ignore
@@ -84,6 +90,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ currentModel, onSe
 
     const getModelDisplayName = (model: string) => {
         if (model.startsWith('ollama-')) return model.replace('ollama-', '');
+        if (model.startsWith('lmstudio:')) return model.slice('lmstudio:'.length);
         if (model === 'gemini-3.1-flash-lite-preview') return 'Gemini 3.1 Flash';
         if (model === 'gemini-3.1-pro-preview') return 'Gemini 3.1 Pro';
         if (model === 'llama-3.3-70b-versatile') return 'Groq Llama 3.3';
@@ -196,23 +203,36 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ currentModel, onSe
                         {/* Local Models (Ollama) */}
                         {activeTab === 'local' && (
                             <div className="space-y-1">
-                                {ollamaModels.length === 0 ? (
+                                {ollamaModels.length === 0 && lmStudioModels.length === 0 ? (
                                     <div className="text-center py-6 text-text-tertiary">
-                                        <p className="text-xs">No Ollama models found.</p>
-                                        <p className="text-[10px] mt-1 opacity-70">Ensure Ollama is running.</p>
+                                        <p className="text-xs">No local models found.</p>
+                                        <p className="text-[10px] mt-1 opacity-70">Start Ollama or LM Studio (local server).</p>
                                     </div>
                                 ) : (
-                                    ollamaModels.map(model => (
-                                        <ModelOption
-                                            key={model}
-                                            id={`ollama-${model}`}
-                                            name={model}
-                                            desc="Local"
-                                            icon={<Server size={14} />}
-                                            selected={currentModel === `ollama-${model}`}
-                                            onSelect={() => handleSelect(`ollama-${model}`)}
-                                        />
-                                    ))
+                                    <>
+                                        {ollamaModels.map(model => (
+                                            <ModelOption
+                                                key={`ollama-${model}`}
+                                                id={`ollama-${model}`}
+                                                name={model}
+                                                desc="Ollama"
+                                                icon={<Server size={14} />}
+                                                selected={currentModel === `ollama-${model}`}
+                                                onSelect={() => handleSelect(`ollama-${model}`)}
+                                            />
+                                        ))}
+                                        {lmStudioModels.map(model => (
+                                            <ModelOption
+                                                key={`lmstudio-${model}`}
+                                                id={`lmstudio:${model}`}
+                                                name={model}
+                                                desc="LM Studio"
+                                                icon={<Server size={14} />}
+                                                selected={currentModel === `lmstudio:${model}`}
+                                                onSelect={() => handleSelect(`lmstudio:${model}`)}
+                                            />
+                                        ))}
+                                    </>
                                 )}
                             </div>
                         )}

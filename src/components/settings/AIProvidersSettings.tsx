@@ -170,6 +170,13 @@ export const AIProvidersSettings: React.FC = () => {
     const [ollamaRestarted, setOllamaRestarted] = useState(false);
     const [isRefreshingOllama, setIsRefreshingOllama] = useState(false);
 
+    // --- Local (LM Studio — OpenAI-compatible server) ---
+    const [lmStudioBaseUrl, setLmStudioBaseUrl] = useState('http://127.0.0.1:1234');
+    const [lmStudioModels, setLmStudioModels] = useState<string[]>([]);
+    const [lmStudioStatus, setLmStudioStatus] = useState<'idle' | 'checking' | 'detected' | 'not-found'>('idle');
+    const [isRefreshingLmStudio, setIsRefreshingLmStudio] = useState(false);
+    const [lmStudioUrlSaved, setLmStudioUrlSaved] = useState(false);
+
     // --- Default Model ---
     const [defaultModel, setDefaultModel] = useState<string>('gemini-3.1-flash-lite-preview');
     const [fastResponseMode, setFastResponseMode] = useState(false);
@@ -245,6 +252,11 @@ export const AIProvidersSettings: React.FC = () => {
                     if (creds.claudePreferredModel) pm.claude = creds.claudePreferredModel;
                     if (creds.openrouterPreferredModel) pm.openrouter = creds.openrouterPreferredModel;
                     setPreferredModels(pm);
+                    const lsUrl = (creds as { lmStudioBaseUrl?: string }).lmStudioBaseUrl;
+                    if (lsUrl) {
+                        const display = lsUrl.replace(/\/v1\/?$/i, '');
+                        setLmStudioBaseUrl(display);
+                    }
                 }
 
                 // Now it's safe to read fast mode — hasStoredKey is already set so
@@ -271,6 +283,10 @@ export const AIProvidersSettings: React.FC = () => {
 
                 // Check Ollama
                 checkOllama();
+
+                const lsFromCreds = creds && (creds as { lmStudioBaseUrl?: string }).lmStudioBaseUrl;
+                const lsProbe = lsFromCreds ? String(lsFromCreds).replace(/\/v1\/?$/i, '') : 'http://127.0.0.1:1234';
+                checkLmStudio(lsProbe);
 
             } catch (e) {
                 console.error("Failed to load settings:", e);
@@ -372,6 +388,40 @@ export const AIProvidersSettings: React.FC = () => {
         } catch (e) {
             console.error("Fix failed", e);
             setOllamaStatus('not-found');
+        }
+    };
+
+    const checkLmStudio = async (urlOverride?: string) => {
+        setLmStudioStatus('checking');
+        try {
+            const url = (urlOverride ?? lmStudioBaseUrl).trim() || 'http://127.0.0.1:1234';
+            // @ts-ignore
+            const models = (await window.electronAPI?.getLmStudioModels?.(url)) as string[];
+            if (models && models.length > 0) {
+                setLmStudioModels(models);
+                setLmStudioStatus('detected');
+            } else {
+                setLmStudioModels([]);
+                setLmStudioStatus('not-found');
+            }
+        } catch {
+            setLmStudioModels([]);
+            setLmStudioStatus('not-found');
+        }
+    };
+
+    const handleSaveLmStudioUrl = async () => {
+        try {
+            const raw = lmStudioBaseUrl.trim() || 'http://127.0.0.1:1234';
+            // @ts-ignore
+            const result = await window.electronAPI?.setLmStudioBaseUrl?.(raw);
+            if (result?.success) {
+                setLmStudioUrlSaved(true);
+                setTimeout(() => setLmStudioUrlSaved(false), 2000);
+                await checkLmStudio();
+            }
+        } catch (e) {
+            console.error('Failed to save LM Studio URL', e);
         }
     };
 
@@ -594,6 +644,7 @@ export const AIProvidersSettings: React.FC = () => {
                                 }
                                 customProviders.forEach(p => opts.push({ id: p.id, name: p.name }));
                                 ollamaModels.forEach(m => opts.push({ id: `ollama-${m}`, name: `${m} (Local)` }));
+                                lmStudioModels.forEach(m => opts.push({ id: `lmstudio:${m}`, name: `${m} (LM Studio)` }));
 
                                 if (defaultModel && !opts.find(o => o.id === defaultModel)) {
                                     opts.unshift({ id: defaultModel, name: prettifyModelId(defaultModel) });
@@ -830,6 +881,109 @@ export const AIProvidersSettings: React.FC = () => {
                     {ollamaStatus === 'detected' && ollamaModels.length === 0 && (
                         <div className="text-xs text-text-secondary">
                             Ollama is running but no models found. Run `ollama pull llama3` to get started.
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {/* LM Studio (OpenAI-compatible local server) */}
+            <div className="space-y-5">
+                <div className="flex items-center justify-between mb-2">
+                    <div>
+                        <h3 className="text-sm font-bold text-text-primary mb-1">Local server (LM Studio)</h3>
+                        <p className="text-xs text-text-secondary">
+                            Connect to the LM Studio local OpenAI-compatible API (default port 1234). Load a model in LM Studio, then start the server.
+                        </p>
+                        <p className="text-[10px] text-text-tertiary mt-1.5 flex flex-wrap items-center gap-x-1 gap-y-0.5">
+                            <span>Official API:</span>
+                            <button
+                                type="button"
+                                onClick={() => window.electronAPI?.openExternal?.('https://lmstudio.ai/docs/developer/openai-compat/models')}
+                                className="text-accent-primary hover:underline inline-flex items-center gap-0.5 font-medium"
+                            >
+                                GET /v1/models <ExternalLink size={10} />
+                            </button>
+                            <span className="text-text-tertiary">·</span>
+                            <button
+                                type="button"
+                                onClick={() => window.electronAPI?.openExternal?.('https://lmstudio.ai/docs/developer/rest/list')}
+                                className="text-accent-primary hover:underline inline-flex items-center gap-0.5 font-medium"
+                            >
+                                GET /api/v1/models <ExternalLink size={10} />
+                            </button>
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={async () => {
+                            setIsRefreshingLmStudio(true);
+                            await checkLmStudio();
+                            setTimeout(() => setIsRefreshingLmStudio(false), 400);
+                        }}
+                        className="p-2 rounded-lg text-text-secondary hover:text-text-primary hover:bg-bg-input transition-colors"
+                        title="Refresh LM Studio models"
+                        disabled={isRefreshingLmStudio}
+                    >
+                        <RefreshCw size={18} className={isRefreshingLmStudio ? "animate-spin" : ""} />
+                    </button>
+                </div>
+
+                <div className="bg-bg-item-surface rounded-xl p-5 border border-border-subtle space-y-4">
+                    <div>
+                        <label className="block text-xs font-medium text-text-primary uppercase tracking-wide mb-1">Server URL</label>
+                        <p className="text-[10px] text-text-secondary mb-2">
+                            Use <span className="font-mono">http://127.0.0.1:1234</span> (host + port), or paste a full LM Studio URL such as <span className="font-mono">…/v1/models</span> — it is normalized to <span className="font-mono">…/v1</span> automatically.
+                        </p>
+                        <div className="flex flex-col sm:flex-row gap-2">
+                            <input
+                                type="text"
+                                value={lmStudioBaseUrl}
+                                onChange={(e) => setLmStudioBaseUrl(e.target.value)}
+                                placeholder="http://127.0.0.1:1234"
+                                className="flex-1 bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-xs font-mono text-text-primary focus:outline-none focus:border-accent-primary"
+                            />
+                            <button
+                                type="button"
+                                onClick={handleSaveLmStudioUrl}
+                                className="shrink-0 px-4 py-2 rounded-lg text-xs font-medium bg-bg-input hover:bg-bg-elevated border border-border-subtle text-text-primary transition-colors"
+                            >
+                                {lmStudioUrlSaved ? 'Saved' : 'Save URL'}
+                            </button>
+                        </div>
+                    </div>
+
+                    {lmStudioStatus === 'checking' && (
+                        <div className="flex items-center gap-2 text-xs text-text-secondary">
+                            <span className="animate-spin">⏳</span> Checking LM Studio server…
+                        </div>
+                    )}
+
+                    {lmStudioStatus === 'not-found' && (
+                        <div className="flex items-start gap-2 text-xs text-red-400">
+                            <AlertCircle size={14} className="shrink-0 mt-0.5" />
+                            <span>
+                                No models found or server unreachable. In LM Studio, open the Local Server tab, load a model, and click Start Server.
+                            </span>
+                        </div>
+                    )}
+
+                    {lmStudioStatus === 'detected' && lmStudioModels.length > 0 && (
+                        <div className="space-y-3">
+                            <div className="flex items-center gap-2 text-xs text-green-400">
+                                <CheckCircle size={14} />
+                                <span>LM Studio connected</span>
+                            </div>
+                            <div className="grid grid-cols-1 gap-2">
+                                {lmStudioModels.map((model) => (
+                                    <div key={model} className="flex items-center justify-between p-2 bg-bg-input rounded-lg border border-border-subtle">
+                                        <span className="text-xs text-text-primary font-mono truncate pr-2">{model}</span>
+                                        <span className="text-[10px] text-bg-elevated bg-text-secondary px-1.5 py-0.5 rounded-full font-bold shrink-0">LOCAL</span>
+                                    </div>
+                                ))}
+                            </div>
+                            <p className="text-[10px] text-text-secondary">
+                                Pick a model below under Default Model for Chat. Loaded models appear as <span className="font-mono">lmstudio:</span> followed by the model id.
+                            </p>
                         </div>
                     )}
                 </div>

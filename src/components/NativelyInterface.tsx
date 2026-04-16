@@ -2253,6 +2253,7 @@ Provide only the answer, nothing else.`;
                                                 {(() => {
                                                     const m = currentModel;
                                                     if (m.startsWith('ollama-')) return m.replace('ollama-', '');
+                                                    if (m.startsWith('lmstudio:')) return m.slice('lmstudio:'.length);
                                                     if (m === 'gemini-3.1-flash-lite-preview') return 'Gemini 3.1 Flash';
                                                     if (m === 'gemini-3.1-pro-preview') return 'Gemini 3.1 Pro';
                                                     if (m === 'llama-3.3-70b-versatile') return 'Groq Llama 3.3';

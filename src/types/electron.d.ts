@@ -70,8 +70,10 @@ export interface ElectronAPI {
   closeAdvancedSettings: () => Promise<void>
 
   // LLM Model Management
-  getCurrentLlmConfig: () => Promise<{ provider: "ollama" | "gemini"; model: string; isOllama: boolean }>
+  getCurrentLlmConfig: () => Promise<{ provider: "ollama" | "gemini" | "custom" | "lmstudio"; model: string; isOllama: boolean; isLmStudio: boolean }>
   getAvailableOllamaModels: () => Promise<string[]>
+  getLmStudioModels: (baseUrl?: string) => Promise<string[]>
+  setLmStudioBaseUrl: (url: string) => Promise<{ success: boolean; error?: string }>
   switchToOllama: (model?: string, url?: string) => Promise<{ success: boolean; error?: string }>
   switchToGemini: (apiKey?: string, modelId?: string) => Promise<{ success: boolean; error?: string }>
   testLlmConnection: (provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'openrouter', apiKey?: string) => Promise<{ success: boolean; error?: string }>
@@ -85,7 +87,7 @@ export interface ElectronAPI {
   setOpenrouterApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
   setNativelyApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
   getNativelyUsage: () => Promise<{ ok: boolean; error?: string; plan?: string; quota?: { transcription: { used: number; limit: number; remaining: number }; ai: { used: number; limit: number; remaining: number }; search: { used: number; limit: number; remaining: number }; resets_at: string }; member_since?: string }>
-  getStoredCredentials: () => Promise<{ hasNativelyKey?: boolean; hasGeminiKey: boolean; hasGroqKey: boolean; hasOpenaiKey: boolean; hasClaudeKey: boolean; hasOpenrouterKey?: boolean; googleServiceAccountPath: string | null; sttProvider: 'none' | 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'natively'; hasSttGroqKey: boolean; hasSttOpenaiKey: boolean; hasDeepgramKey: boolean; hasElevenLabsKey: boolean; hasAzureKey: boolean; azureRegion: string; hasIbmWatsonKey: boolean; ibmWatsonRegion: string; groqSttModel?: string; hasSonioxKey?: boolean; hasTavilyKey?: boolean; geminiPreferredModel?: string; groqPreferredModel?: string; openaiPreferredModel?: string; claudePreferredModel?: string; openrouterPreferredModel?: string; sttGroqKey?: string; sttOpenaiKey?: string; sttDeepgramKey?: string; sttElevenLabsKey?: string; sttAzureKey?: string; sttIbmKey?: string; sttSonioxKey?: string }>
+  getStoredCredentials: () => Promise<{ hasNativelyKey?: boolean; hasGeminiKey: boolean; hasGroqKey: boolean; hasOpenaiKey: boolean; hasClaudeKey: boolean; hasOpenrouterKey?: boolean; googleServiceAccountPath: string | null; sttProvider: 'none' | 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'natively'; hasSttGroqKey: boolean; hasSttOpenaiKey: boolean; hasDeepgramKey: boolean; hasElevenLabsKey: boolean; hasAzureKey: boolean; azureRegion: string; hasIbmWatsonKey: boolean; ibmWatsonRegion: string; groqSttModel?: string; hasSonioxKey?: boolean; hasTavilyKey?: boolean; geminiPreferredModel?: string; groqPreferredModel?: string; openaiPreferredModel?: string; claudePreferredModel?: string; openrouterPreferredModel?: string; lmStudioBaseUrl?: string; sttGroqKey?: string; sttOpenaiKey?: string; sttDeepgramKey?: string; sttElevenLabsKey?: string; sttAzureKey?: string; sttIbmKey?: string; sttSonioxKey?: string }>
   // Permissions
   checkPermissions:     () => Promise<{ microphone: 'granted'|'denied'|'not-determined'|'restricted'; screen: 'granted'|'denied'|'not-determined'|'restricted'; platform: string }>
   requestMicPermission: () => Promise<boolean>

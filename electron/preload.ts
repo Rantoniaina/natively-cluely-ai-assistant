@@ -47,8 +47,10 @@ interface ElectronAPI {
   quitApp: () => Promise<void>
 
   // LLM Model Management
-  getCurrentLlmConfig: () => Promise<{ provider: "ollama" | "gemini"; model: string; isOllama: boolean }>
+  getCurrentLlmConfig: () => Promise<{ provider: "ollama" | "gemini" | "custom" | "lmstudio"; model: string; isOllama: boolean; isLmStudio: boolean }>
   getAvailableOllamaModels: () => Promise<string[]>
+  getLmStudioModels: (baseUrl?: string) => Promise<string[]>
+  setLmStudioBaseUrl: (url: string) => Promise<{ success: boolean; error?: string }>
   switchToOllama: (model?: string, url?: string) => Promise<{ success: boolean; error?: string }>
   switchToGemini: (apiKey?: string, modelId?: string) => Promise<{ success: boolean; error?: string }>
   testLlmConnection: (provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'openrouter', apiKey?: string) => Promise<{ success: boolean; error?: string }>
@@ -513,6 +515,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // LLM Model Management
   getCurrentLlmConfig: () => ipcRenderer.invoke("get-current-llm-config"),
   getAvailableOllamaModels: () => ipcRenderer.invoke("get-available-ollama-models"),
+  getLmStudioModels: (baseUrl?: string) => ipcRenderer.invoke("get-lm-studio-models", baseUrl),
+  setLmStudioBaseUrl: (url: string) => ipcRenderer.invoke("set-lm-studio-base-url", url),
   switchToOllama: (model?: string, url?: string) => ipcRenderer.invoke("switch-to-ollama", model, url),
   switchToGemini: (apiKey?: string, modelId?: string) => ipcRenderer.invoke("switch-to-gemini", apiKey, modelId),
   testLlmConnection: (provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'openrouter', apiKey?: string) => ipcRenderer.invoke("test-llm-connection", provider, apiKey),

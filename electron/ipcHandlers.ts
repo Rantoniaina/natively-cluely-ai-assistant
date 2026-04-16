@@ -673,7 +673,8 @@ export function initializeIpcHandlers(appState: AppState): void {
       return {
         provider: llmHelper.getCurrentProvider(),
         model: llmHelper.getCurrentModel(),
-        isOllama: llmHelper.isUsingOllama()
+        isOllama: llmHelper.isUsingOllama(),
+        isLmStudio: llmHelper.isUsingLmStudio()
       };
     } catch (error: any) {
       // console.error("Error getting current LLM config:", error);
@@ -699,6 +700,31 @@ export function initializeIpcHandlers(appState: AppState): void {
       return { success: true };
     } catch (error: any) {
       // console.error("Error switching to Ollama:", error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  safeHandle("get-lm-studio-models", async (_, baseUrl?: string) => {
+    try {
+      const llmHelper = appState.processingHelper.getLLMHelper();
+      const { CredentialsManager } = require('./services/CredentialsManager');
+      const url = (baseUrl && String(baseUrl).trim()) || CredentialsManager.getInstance().getLmStudioBaseUrl();
+      const models = await llmHelper.getLmStudioModels(url);
+      return models;
+    } catch (error: any) {
+      return [];
+    }
+  });
+
+  safeHandle("set-lm-studio-base-url", async (_, url: string) => {
+    try {
+      const { CredentialsManager } = require('./services/CredentialsManager');
+      const cm = CredentialsManager.getInstance();
+      cm.setLmStudioBaseUrl(url || '');
+      const llmHelper = appState.processingHelper.getLLMHelper();
+      llmHelper.setLmStudioBaseUrl(cm.getLmStudioBaseUrl());
+      return { success: true };
+    } catch (error: any) {
       return { success: false, error: error.message };
     }
   });
@@ -880,6 +906,7 @@ export function initializeIpcHandlers(appState: AppState): void {
       // Sync the model into LLMHelper and notify the UI whenever the effective default changed
       const defaultModel = cm.getDefaultModel();
       const providers = [...(cm.getCurlProviders() || []), ...(cm.getCustomProviders() || [])];
+      llmHelper.setLmStudioBaseUrl(cm.getLmStudioBaseUrl());
       llmHelper.setModel(defaultModel, providers);
       BrowserWindow.getAllWindows().forEach(win => {
         if (!win.isDestroyed()) win.webContents.send('model-changed', defaultModel);
@@ -1402,6 +1429,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         openaiPreferredModel: creds.openaiPreferredModel || undefined,
         claudePreferredModel: creds.claudePreferredModel || undefined,
         openrouterPreferredModel: creds.openrouterPreferredModel || undefined,
+        lmStudioBaseUrl: CredentialsManager.getInstance().getLmStudioBaseUrl(),
       };
     } catch (error: any) {
       return { hasGeminiKey: false, hasGroqKey: false, hasOpenaiKey: false, hasClaudeKey: false, hasOpenrouterKey: false, hasNativelyKey: false, googleServiceAccountPath: null, sttProvider: 'none', groqSttModel: 'whisper-large-v3-turbo', hasSttGroqKey: false, hasSttOpenaiKey: false, hasDeepgramKey: false, hasElevenLabsKey: false, hasAzureKey: false, azureRegion: 'eastus', hasIbmWatsonKey: false, ibmWatsonRegion: 'us-south', hasSonioxKey: false, hasTavilyKey: false, sttGroqKey: '', sttOpenaiKey: '', sttDeepgramKey: '', sttElevenLabsKey: '', sttAzureKey: '', sttIbmKey: '', sttSonioxKey: '' };
@@ -1930,6 +1958,8 @@ export function initializeIpcHandlers(appState: AppState): void {
       const { CredentialsManager } = require('./services/CredentialsManager');
       const cm = CredentialsManager.getInstance();
 
+      llmHelper.setLmStudioBaseUrl(cm.getLmStudioBaseUrl());
+
       // Get all providers (Curl + Custom)
       const curlProviders = cm.getCurlProviders();
       const legacyProviders = cm.getCustomProviders() || [];
@@ -1963,6 +1993,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 
       // Also update the runtime model
       const llmHelper = appState.processingHelper.getLLMHelper();
+      llmHelper.setLmStudioBaseUrl(cm.getLmStudioBaseUrl());
       const curlProviders = cm.getCurlProviders();
       const legacyProviders = cm.getCustomProviders() || [];
       const allProviders = [...curlProviders, ...legacyProviders];
